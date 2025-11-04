@@ -2,6 +2,7 @@
 # /// script
 # requires-python = ">=3.11"
 # dependencies = [
+#     "rich",
 #     "toml",
 # ]
 # ///
@@ -25,11 +26,12 @@ import os
 import subprocess
 import shlex
 import toml
+from rich import print as rprint
 from pathlib import Path
 
 
 def error(msg: str, code: int = 1) -> None:
-    print(f"error: {msg}", file=sys.stderr)
+    rprint(f"error: {msg}", file=sys.stderr)
     sys.exit(code)
 
 
@@ -41,7 +43,7 @@ def find_config(start: Path) -> Path:
         if candidate.exists():
             return candidate
         if str(p) == root:
-            print("remote.toml not found in any parent directory")
+            rprint("remote.toml not found in any parent directory")
             sys.exit(1)
         p = p.parent
 
@@ -51,8 +53,28 @@ def loadtoml(path: Path) -> dict:
     return toml.loads(data.decode())
 
 
-def run_cmd(cmd: str) -> subprocess.CompletedProcess:
-    return subprocess.run(cmd, shell=True, executable="/bin/bash")
+def run_cmd(cmd: str, color_output=None) -> int:
+    if not color_output:
+        return subprocess.run(cmd, shell=True, executable="/bin/bash").returncode
+
+    process = subprocess.Popen(
+        cmd,
+        shell=True,
+        executable="/bin/bash",
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+        encoding="UTF-8",
+    )
+    assert process.stdout
+
+    try:
+        for line in process.stdout:
+            rprint(f"[{color_output}]" + line + f"[/{color_output}]", end="")
+    except KeyboardInterrupt:
+        process.terminate()
+        raise
+    finally:
+        return process.wait()
 
 
 def build_rsync_options(cfg: dict, delete: bool = False) -> str:
@@ -82,7 +104,7 @@ def get_remote_run_dir(local_project_dir, local_run_dir, remote_project_dir):
 
 def main(argv: list[str]) -> None:
     if len(argv) < 2:
-        print("usage: remote <cmd>")
+        rprint("usage: remote <cmd>")
         sys.exit(2)
 
     local_run_dir = Path.cwd()
@@ -97,21 +119,20 @@ def main(argv: list[str]) -> None:
         local_project_dir, local_run_dir, remote_project_dir
     )
 
-    print(f"local_run_dir     : {local_run_dir}")
-    print(f"local_project_dir : {local_project_dir}")
-    print(f"remote            : {remote}")
-    print(f"remote_project_dir: {remote_project_dir}")
-    print(f"remote_run_dir    : {remote_run_dir}")
+    rprint(f"[grey30]local_run_dir     : {local_run_dir}[/grey30]")
+    rprint(f"[grey30]local_project_dir : {local_project_dir}[/grey30]")
+    rprint(f"[grey30]remote            : {remote}[/grey30]")
+    rprint(f"[grey30]remote_project_dir: {remote_project_dir}[/grey30]")
+    rprint(f"[grey30]remote_run_dir    : {remote_run_dir}[/grey30]")
 
     # rsync to to remote
     src = shlex.quote(str(local_project_dir)) + "/"
     dst = shlex.quote(f"{remote}:{remote_project_dir}/")
     rsync_up_opts = build_rsync_options(cfg, delete=True)
     rsync_up_cmd = f"rsync {rsync_up_opts} {src} {dst}"
-    print(f"rsync up: {rsync_up_cmd}")
-    result = run_cmd(rsync_up_cmd)
-    if result.returncode != 0:
-        error(f"rsync (up) failed with code {result.returncode}")
+    returncode = run_cmd(rsync_up_cmd, color_output="grey30")
+    if returncode != 0:
+        error(f"rsync (up) failed with code {returncode}")
 
     # run command
     command = " ".join(shlex.quote(a) for a in argv[1:])
@@ -119,20 +140,18 @@ def main(argv: list[str]) -> None:
         command = cfg["command_prefix"] + " " + command
     remote_run_cmd = f"cd {remote_run_dir} && {command}"
     ssh_cmd = f"ssh {shlex.quote(remote)} {shlex.quote(remote_run_cmd)}"
-    print(f"ssh: {ssh_cmd}")
-    result = run_cmd(ssh_cmd)
-    exit_code = result.returncode
+    returncode = run_cmd(ssh_cmd)
+    exit_code = returncode
 
     # sync back
     src_back = shlex.quote(f"{remote}:{remote_project_dir}/")
     dst_back = shlex.quote(str(local_project_dir) + "/")
     rsync_down_opts = build_rsync_options(cfg, delete=False)
     rsync_down_cmd = f"rsync {rsync_down_opts} {src_back} {dst_back}"
-    print(f"rsync down: {rsync_down_cmd}")
-    result = run_cmd(rsync_down_cmd)
-    if result.returncode != 0:
-        print(
-            f"warning: rsync (down) failed with code {result.returncode}",
+    returncode = run_cmd(rsync_down_cmd, color_output="grey30")
+    if returncode != 0:
+        rprint(
+            f"warning: rsync (down) failed with code {returncode}",
             file=sys.stderr,
         )
 
