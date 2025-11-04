@@ -1,0 +1,143 @@
+#!/usr/bin/env -S uv run --script
+# /// script
+# requires-python = ">=3.11"
+# dependencies = [
+#     "toml",
+# ]
+# ///
+"""
+remote — sync, run remotely, sync back
+
+Usage: remote <cmd>
+
+`remote.toml` example:
+
+remote = "user@example.com"
+remote_project_dir = "/home/user/myproject"
+
+[rsync]
+exclude = [".git", "__pycache__", "*.tmp"]
+extra_options = ["--progress"]
+"""
+
+import sys
+import os
+import subprocess
+import shlex
+import toml
+from pathlib import Path
+
+
+def error(msg: str, code: int = 1) -> None:
+    print(f"error: {msg}", file=sys.stderr)
+    sys.exit(code)
+
+
+def find_config(start: Path) -> Path:
+    p = start.resolve()
+    root = p.anchor
+    while True:
+        candidate = p / "remote.toml"
+        if candidate.exists():
+            return candidate
+        if str(p) == root:
+            print("remote.toml not found in any parent directory")
+            sys.exit(1)
+        p = p.parent
+
+
+def loadtoml(path: Path) -> dict:
+    data = path.read_bytes()
+    return toml.loads(data.decode())
+
+
+def run_cmd(cmd: str) -> subprocess.CompletedProcess:
+    return subprocess.run(cmd, shell=True, executable="/bin/bash")
+
+
+def build_rsync_options(cfg: dict, delete: bool = False) -> str:
+    opts = ["-a", "-i"]
+    if delete:
+        opts.append("--delete")
+    rsync_cfg = cfg.get("rsync", {}) if isinstance(cfg.get("rsync", {}), dict) else {}
+    excludes = rsync_cfg.get("exclude", [])
+    extras = rsync_cfg.get("extra_options", [])
+    for ex in excludes:
+        opts.append(f"--exclude={shlex.quote(ex)}")
+    for exopt in extras:
+        opts.append(exopt)
+    return " ".join(opts)
+
+
+def get_remote_run_dir(local_project_dir, local_run_dir, remote_project_dir):
+    local_project_dir_str = str(local_project_dir)
+    local_run_dir_str = str(local_run_dir)
+    if not local_run_dir_str.startswith(local_project_dir_str):
+        error(
+            f"current directory ({local_run_dir_str}) is not inside project dir ({local_project_dir_str})"
+        )
+    rel = local_run_dir_str[len(local_project_dir_str) :]
+    return os.path.join(remote_project_dir, rel.lstrip(os.sep))
+
+
+def main(argv: list[str]) -> None:
+    if len(argv) < 2:
+        print("usage: remote <cmd>")
+        sys.exit(2)
+
+    local_run_dir = Path.cwd()
+
+    config_filename = find_config(local_run_dir)
+    local_project_dir = config_filename.parent.resolve()
+    cfg = loadtoml(config_filename)
+
+    remote = cfg["remote"]
+    remote_project_dir = cfg["remote_project_dir"]
+    remote_run_dir = get_remote_run_dir(
+        local_project_dir, local_run_dir, remote_project_dir
+    )
+
+    print(f"local_run_dir     : {local_run_dir}")
+    print(f"local_project_dir : {local_project_dir}")
+    print(f"remote            : {remote}")
+    print(f"remote_project_dir: {remote_project_dir}")
+    print(f"remote_run_dir    : {remote_run_dir}")
+
+    # rsync to to remote
+    src = shlex.quote(str(local_project_dir)) + "/"
+    dst = shlex.quote(f"{remote}:{remote_project_dir}/")
+    rsync_up_opts = build_rsync_options(cfg, delete=True)
+    rsync_up_cmd = f"rsync {rsync_up_opts} {src} {dst}"
+    print(f"rsync up: {rsync_up_cmd}")
+    result = run_cmd(rsync_up_cmd)
+    if result.returncode != 0:
+        error(f"rsync (up) failed with code {result.returncode}")
+
+    # run command
+    command = " ".join(shlex.quote(a) for a in argv[1:])
+    if "command_prefix" in cfg:
+        command = cfg["command_prefix"] + " " + command
+    remote_run_cmd = f"cd {remote_run_dir} && {command}"
+    ssh_cmd = f"ssh {shlex.quote(remote)} {shlex.quote(remote_run_cmd)}"
+    print(f"ssh: {ssh_cmd}")
+    result = run_cmd(ssh_cmd)
+    exit_code = result.returncode
+
+    # sync back
+    src_back = shlex.quote(f"{remote}:{remote_project_dir}/")
+    dst_back = shlex.quote(str(local_project_dir) + "/")
+    rsync_down_opts = build_rsync_options(cfg, delete=False)
+    rsync_down_cmd = f"rsync {rsync_down_opts} {src_back} {dst_back}"
+    print(f"rsync down: {rsync_down_cmd}")
+    result = run_cmd(rsync_down_cmd)
+    if result.returncode != 0:
+        print(
+            f"warning: rsync (down) failed with code {result.returncode}",
+            file=sys.stderr,
+        )
+
+    sys.exit(exit_code if exit_code is not None else 0)
+
+
+if __name__ == "__main__":
+    main(sys.argv)
