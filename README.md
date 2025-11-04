@@ -13,7 +13,15 @@ remote <cmd>
 
 Searches for a `remote.toml` file in parent directories. The directory where
 this file is found is treated as the project directory. Everything under this
-directory will be `rsync`ed to the remote.
+directory will be `rsync`ed to the remote, `<cmd>` will be executed, and
+changed/added files will be synced back to the local machine again.
+
+This is to keep the remote in sync with the local project directory.
+
+> [!NOTE]
+> This also means that the upload to the remote will delete files that are not on the local machine.
+>
+> Make sure the remote project directory does not contain files that you don't have locally before you run this command the first time.
 
 Example `remote.toml`:
 ```toml
