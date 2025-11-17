@@ -26,6 +26,7 @@ import os
 import subprocess
 import shlex
 import toml
+import pty
 from rich import print as rprint
 from pathlib import Path
 
@@ -53,7 +54,10 @@ def loadtoml(path: Path) -> dict:
     return toml.loads(data.decode())
 
 
-def run_cmd(cmd: str, color_output=None) -> int:
+def run_cmd(cmd: str | list[str], color_output=None) -> int:
+    if not isinstance(cmd, str):
+        cmd = " ".join([shlex.quote(a) for a in cmd])
+
     if not color_output:
         return subprocess.run(cmd, shell=True, executable="/bin/bash").returncode
 
@@ -139,7 +143,7 @@ def main(argv: list[str]) -> None:
     if "command_prefix" in cfg:
         command = cfg["command_prefix"] + " " + command
     remote_run_cmd = f"cd {remote_run_dir} && {command}"
-    ssh_cmd = f"ssh {shlex.quote(remote)} {shlex.quote(remote_run_cmd)}"
+    ssh_cmd = ["ssh", "-t", shlex.quote(remote), remote_run_cmd]
     returncode = run_cmd(ssh_cmd)
     exit_code = returncode
 
