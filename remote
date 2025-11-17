@@ -81,10 +81,16 @@ def run_cmd(cmd: str | list[str], color_output=None) -> int:
         return process.wait()
 
 
-def build_rsync_options(cfg: dict, delete: bool = False) -> str:
+def build_rsync_options(cfg: dict, exact_mirror: bool = False) -> str:
     opts = ["-a", "-i"]
-    if delete:
+    if exact_mirror:
+        # delete files on destination that are not present on source
         opts.append("--delete")
+    else:
+        # do not update files on destination that have a newer modified time
+        # than on source (e.g., if you changed a file locally while running
+        # `remote`, you don't want the local changes to be reset)
+        opts.append("--update")
     rsync_cfg = cfg.get("rsync", {}) if isinstance(cfg.get("rsync", {}), dict) else {}
     excludes = rsync_cfg.get("exclude", [])
     extras = rsync_cfg.get("extra_options", [])
@@ -132,7 +138,7 @@ def main(argv: list[str]) -> None:
     # rsync to to remote
     src = shlex.quote(str(local_project_dir)) + "/"
     dst = shlex.quote(f"{remote}:{remote_project_dir}/")
-    rsync_up_opts = build_rsync_options(cfg, delete=True)
+    rsync_up_opts = build_rsync_options(cfg, exact_mirror=True)
     rsync_up_cmd = f"rsync {rsync_up_opts} {src} {dst}"
     returncode = run_cmd(rsync_up_cmd, color_output="grey30")
     if returncode != 0:
@@ -150,7 +156,7 @@ def main(argv: list[str]) -> None:
     # sync back
     src_back = shlex.quote(f"{remote}:{remote_project_dir}/")
     dst_back = shlex.quote(str(local_project_dir) + "/")
-    rsync_down_opts = build_rsync_options(cfg, delete=False)
+    rsync_down_opts = build_rsync_options(cfg, exact_mirror=False)
     rsync_down_cmd = f"rsync {rsync_down_opts} {src_back} {dst_back}"
     returncode = run_cmd(rsync_down_cmd, color_output="grey30")
     if returncode != 0:
